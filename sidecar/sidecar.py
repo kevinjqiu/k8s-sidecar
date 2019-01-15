@@ -1,4 +1,5 @@
 from kubernetes import client, config, watch
+import logging
 import os
 import sys
 import requests
@@ -6,10 +7,17 @@ from requests.packages.urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S')
+
+logger = logging.getLogger(__name__)
+
+
 def writeTextToFile(folder, filename, data):
     with open(folder +"/"+ filename, 'w') as f:
         f.write(data)
-        f.close()
 
 
 def request(url, method, payload):
@@ -21,14 +29,14 @@ def request(url, method, payload):
     r.mount('http://', HTTPAdapter(max_retries=retries))
     r.mount('https://', HTTPAdapter(max_retries=retries))
     if url is None:
-        print("No url provided. Doing nothing.")
+        logger.info("No url provided. Doing nothing.")
         # If method is not provided use GET as default
     elif method == "GET" or method is None:
         res = r.get("%s" % url, timeout=10)
-        print ("%s request sent to %s. Response: %d %s" % (method, url, res.status_code, res.reason))
+        logger.info ("%s request sent to %s. Response: %d %s" % (method, url, res.status_code, res.reason))
     elif method == "POST":
         res = r.post("%s" % url, json=payload, timeout=10)
-        print ("%s request sent to %s. Response: %d %s" % (method, url, res.status_code, res.reason))
+        logger.info ("%s request sent to %s. Response: %d %s" % (method, url, res.status_code, res.reason))
 
 
 def removeFile(folder, filename):
@@ -36,14 +44,14 @@ def removeFile(folder, filename):
     if os.path.isfile(completeFile):
         os.remove(completeFile)
     else:
-        print("Error: %s file not found" % completeFile)
+        logger.info("Error: %s file not found" % completeFile)
 
 
 def watchForChanges(label, targetFolder, url, method, payload, current):
     v1 = client.CoreV1Api()
     w = watch.Watch()
     stream = None
-    namespace = os.getenv("NAMESPACE")
+    namespace = os.getenv("NAMESPACE") or 'ALL'
     if namespace is None:
         stream = w.stream(v1.list_namespaced_config_map, namespace=current)
     elif namespace == "ALL":
@@ -54,16 +62,16 @@ def watchForChanges(label, targetFolder, url, method, payload, current):
         metadata = event['object'].metadata
         if metadata.labels is None:
             continue
-        print(f'Working on configmap {metadata.namespace}/{metadata.name}')
+        logger.info(f'Working on configmap {metadata.namespace}/{metadata.name}')
         if label in event['object'].metadata.labels.keys():
-            print("Configmap with label found")
+            logger.info("Configmap with label found")
             dataMap=event['object'].data
             if dataMap is None:
-                print("Configmap does not have data.")
+                logger.info("Configmap does not have data.")
                 continue
             eventType = event['type']
             for filename in dataMap.keys():
-                print("File in configmap %s %s" % (filename, eventType))
+                logger.info("File in configmap %s %s" % (filename, eventType))
                 if (eventType == "ADDED") or (eventType == "MODIFIED"):
                     writeTextToFile(targetFolder, filename, dataMap[filename])
                     if url is not None:
@@ -75,14 +83,14 @@ def watchForChanges(label, targetFolder, url, method, payload, current):
 
 
 def main():
-    print("Starting config map collector")
+    logger.info("Starting config map collector")
     label = os.getenv('LABEL')
     if label is None:
-        print("Should have added LABEL as environment variable! Exit")
+        logger.info("Should have added LABEL as environment variable! Exit")
         return -1
     targetFolder = os.getenv('FOLDER')
     if targetFolder is None:
-        print("Should have added FOLDER as environment variable! Exit")
+        logger.info("Should have added FOLDER as environment variable! Exit")
         return -1
 
     method = os.getenv('REQ_METHOD')
@@ -90,7 +98,7 @@ def main():
     payload = os.getenv('REQ_PAYLOAD')
 
     config.load_incluster_config()
-    print("Config for cluster api loaded...")
+    logger.info("Config for cluster api loaded...")
     namespace = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
     watchForChanges(label, targetFolder, url, method, payload, namespace)
 
